@@ -983,7 +983,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     return res;
 }
 
-ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_metal_library_t lib, const ggml_tensor * op) {
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_metal_library_t lib, const ggml_tensor * op, bool add) {
     GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
     GGML_TENSOR_LOCALS( int32_t, ne1, op->src[1], ne);
 
@@ -1078,6 +1078,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_meta
             {
                 nsg = N_SG_Q4_K;
                 nr0 = N_R0_Q4_K;
+                if (add) {
+                    suffix = "_add";
+                }
             } break;
         case GGML_TYPE_Q5_K:
             {
@@ -1088,6 +1091,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_meta
             {
                 nsg = N_SG_Q6_K;
                 nr0 = N_R0_Q6_K;
+                if (add) {
+                    suffix = "_add";
+                }
             } break;
         case GGML_TYPE_IQ2_XXS:
             {

@@ -2541,7 +2541,19 @@ static int ggml_metal_op_mul_mat_mv(ggml_metal_op_t ctx, int idx) {
     const int16_t r2 = ne12/ne02;
     const int16_t r3 = ne13/ne03;
 
-    auto pipeline = ggml_metal_library_get_pipeline_mul_mv(lib, op);
+    // the ADD fused into the mat-vec store, if the table fuses the residual after this mat-mul
+    const int  n_fuse   = ggml_metal_op_try_fusion(ctx, idx, GGML_METAL_FUSION_MUL_MAT_ADD);
+    const bool fuse_add = n_fuse > 1;
+
+    const ggml_tensor * dst = op;
+    const ggml_tensor * res = op;
+
+    if (fuse_add) {
+        dst = ctx->node(idx + n_fuse - 1);
+        res = dst->src[0] == op ? dst->src[1] : dst->src[0];
+    }
+
+    auto pipeline = ggml_metal_library_get_pipeline_mul_mv(lib, op, fuse_add);
 
     const int nr0 = pipeline.nr0;
     const int nr1 = pipeline.nr1;
@@ -2575,7 +2587,11 @@ static int ggml_metal_op_mul_mat_mv(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(dst),        3);
+
+    if (fuse_add) {
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(res), 4);
+    }
 
     ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
@@ -2588,7 +2604,7 @@ static int ggml_metal_op_mul_mat_mv(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_dispatch_threadgroups(enc, ((ne01 + nr0*nsg - 1)/(nr0*nsg)), ((ne11 + nr1 - 1)/nr1), ne12*ne13, 32, nsg, 1);
     }
 
-    return 1;
+    return n_fuse;
 }
 
 int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {

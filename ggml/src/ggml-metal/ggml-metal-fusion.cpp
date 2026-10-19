@@ -692,8 +692,17 @@ static bool ggml_metal_fusion_check_mul_mat_add(
     const ggml_tensor * mm  = nodes[0];
     const ggml_tensor * add = nodes[1];
 
-    if (ggml_metal_mul_mat_add_operand(mm, add) == nullptr ||
-        !ggml_metal_op_mul_mat_may_use_mma(mm)) {
+    if (ggml_metal_mul_mat_add_operand(mm, add) == nullptr) {
+        return false;
+    }
+
+    const bool use_mma = ggml_metal_op_mul_mat_use_mma(mm);
+    const bool use_mv  = !use_mma &&
+        (mm->src[0]->type == GGML_TYPE_Q4_K || mm->src[0]->type == GGML_TYPE_Q6_K) &&
+        mm->src[1]->type == GGML_TYPE_F32 && mm->src[1]->ne[1] == 1 &&
+        !ggml_is_transposed(mm->src[0]) && !ggml_is_transposed(mm->src[1]);
+
+    if (!use_mma && !use_mv) {
         return false;
     }
 
@@ -703,7 +712,7 @@ static bool ggml_metal_fusion_check_mul_mat_add(
 
     const ggml_tensor * res = ggml_metal_mul_mat_add_residual(mm, add);
 
-    if (res == nullptr || !ggml_metal_op_mul_mat_use_mma(mm)) {
+    if (res == nullptr) {
         return false;
     }
 
