@@ -8,7 +8,7 @@
 		gaugePopup,
 		gaugePopupClose
 	} from './gauge-popup.svelte';
-	import { FoldVertical } from '@lucide/svelte';
+	import { FoldVertical, Loader2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Drawer from '$lib/components/ui/drawer';
 	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
@@ -59,12 +59,16 @@
 
 	const showCompactButton = $derived(canCompactMessages(conversationsStore.activeMessages));
 
+	const activeConvId = $derived(conversationsStore.activeConversation?.id ?? null);
+
+	// A summary in flight keeps the card open for the numbers, so the action
+	// reports the run instead of inviting a second one.
+	const isCompacting = $derived(activeConvId !== null && chatStore.isCompacting(activeConvId));
+
 	const isCompactDisabled = $derived.by(() => {
-		const convId = conversationsStore.activeConversation?.id;
+		if (!activeConvId) return true;
 
-		if (!convId) return true;
-
-		return chatStore.isChatLoading(convId) || agenticStore.isRunning(convId);
+		return chatStore.isChatLoading(activeConvId) || agenticStore.isRunning(activeConvId);
 	});
 
 	function handleCompact() {
@@ -89,8 +93,13 @@
 			size="sm"
 			variant="tertiary"
 		>
-			<FoldVertical class="h-3.5 w-3.5" />
-			Compact conversation
+			{#if isCompacting}
+				<Loader2 class="h-3.5 w-3.5 animate-spin" />
+				Compacting...
+			{:else}
+				<FoldVertical class="h-3.5 w-3.5" />
+				Compact conversation
+			{/if}
 		</Button>
 	{/if}
 {/snippet}
