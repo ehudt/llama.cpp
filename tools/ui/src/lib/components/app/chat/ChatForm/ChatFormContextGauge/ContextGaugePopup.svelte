@@ -80,6 +80,21 @@
 	</span>
 {/snippet}
 
+{#snippet compactAction()}
+	{#if showCompactButton}
+		<Button
+			class="w-full gap-1.5"
+			disabled={isCompactDisabled}
+			onclick={handleCompact}
+			size="sm"
+			variant="outline"
+		>
+			<FoldVertical class="h-3.5 w-3.5" />
+			Compact conversation
+		</Button>
+	{/if}
+{/snippet}
+
 {#snippet body()}
 	{#if gauge.activeModelId !== null && !gauge.isActiveModelLoaded}
 		<ContextGaugeLoadModel
@@ -108,19 +123,6 @@
 		</div>
 	{:else}
 		<div class="text-xs text-muted-foreground">No context info available</div>
-	{/if}
-
-	{#if showCompactButton}
-		<Button
-			class="w-full gap-1.5"
-			disabled={isCompactDisabled}
-			onclick={handleCompact}
-			size="sm"
-			variant="outline"
-		>
-			<FoldVertical class="h-3.5 w-3.5" />
-			Compact conversation
-		</Button>
 	{/if}
 
 	{#if gauge.hasAnyUsage}
@@ -154,6 +156,8 @@
 				{@render usage()}
 
 				{@render body()}
+
+				{@render compactAction()}
 			</div>
 		</Drawer.Content>
 	</Drawer.Root>
@@ -176,6 +180,8 @@
 			</div>
 
 			{@render body()}
+
+			{@render compactAction()}
 		</div>
 	</div>
 {/if}
