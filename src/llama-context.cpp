@@ -208,6 +208,39 @@ llama_context::llama_context(
     cparams.no_perf                 = params.no_perf;
     cparams.warmup                  = false;
 
+    // f16 activations for quantized mat-vecs: only when every mat-vec runs on a device
+    // that implements a quantized x f16 mat-vec (the Metal backend does for q4_K/q6_K)
+    {
+        if (ggml_backend_dev_type(model.dev_output()) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+            bool all_gpu = true;
+            for (int il = 0; il < hparams.n_layer(); ++il) {
+                if (ggml_backend_dev_type(model.dev_layer(il)) != GGML_BACKEND_DEVICE_TYPE_GPU) {
+                    all_gpu = false;
+                    break;
+                }
+            }
+
+            if (all_gpu) {
+                ggml_init_params ip = { ggml_tensor_overhead()*8, NULL, true };
+                ggml_context * ctx = ggml_init(ip);
+                ggml_backend_buffer_t buf = ggml_backend_buft_alloc_buffer(ggml_backend_dev_buffer_type(model.dev_output()), 0);
+
+                ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_Q4_K, 256, 1);
+                ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 256, 1);
+                ggml_tensor * c = ggml_mul_mat(ctx, a, b);
+
+                a->buffer = buf;
+                b->buffer = buf;
+                c->buffer = buf;
+
+                cparams.f16_act = ggml_backend_dev_supports_op(model.dev_output(), c);
+
+                ggml_backend_buffer_free(buf);
+                ggml_free(ctx);
+            }
+        }
+    }
+
     // +1: id n_layer() taps the output of the last layer ("input" of the head)
     cparams.embeddings_layer_inp.resize(hparams.n_layer() + 1, false);
     embd_layer_inp.resize(hparams.n_layer() + 1);

@@ -1631,7 +1631,22 @@ ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * cur,
           ggml_tensor * w_s) const {
     cur = build_hadamard_input(w, cur);
-    ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
+
+    ggml_tensor * cur_mm = cur;
+
+    // feed the quantized mat-vec an f16 copy of the activation; one copy per producer
+    // tensor, shared by all of its consumers in the graph
+    if (cparams.f16_act &&
+            cur->type == GGML_TYPE_F32 &&
+            (w->type == GGML_TYPE_Q4_K || w->type == GGML_TYPE_Q6_K)) {
+        auto it = f16_act_cache.find(cur);
+        if (it == f16_act_cache.end()) {
+            it = f16_act_cache.emplace(cur, ggml_cast(ctx0, cur, GGML_TYPE_F16)).first;
+        }
+        cur_mm = it->second;
+    }
+
+    ggml_tensor * res = ggml_mul_mat(ctx0, w, cur_mm);
 
     if (prec_policy) {
         prec_policy->apply(res);

@@ -173,6 +173,97 @@ kernel void kernel_rms_norm_fuse_impl(
     }
 }
 
+// RMS_NORM + MUL + CPY to f16: write both outputs in one kernel so the f16 copy
+// is not a separate dispatch on the critical path before the mat-vec consumers
+template <typename T, typename T16>
+static void rms_norm_mul_cpy_body(
+        constant ggml_metal_kargs_norm & args,
+        device const char * src0,
+        device const char * src1_0,
+        device       char * dst,
+        device       char * dst16,
+        threadgroup float * shmem_f32,
+        uint3   tgpig,
+        ushort3 tpitg,
+        ushort  sgitg,
+        ushort  tiisg,
+        ushort3   ntg) {
+    if (sgitg == 0) {
+        shmem_f32[tiisg] = 0.0f;
+    }
+
+    const int i01 = tgpig.x;
+    const int i02 = tgpig.y;
+    const int i03 = tgpig.z;
+
+    device const T * x  = (device const T *) (src0   + i03*args.nbf3[0] + i02*args.nbf2[0] + i01*args.nbf1[0]);
+    device const T * f0 = (device const T *) (src1_0 + (i03%args.nef3[1])*args.nbf3[1] + (i02%args.nef2[1])*args.nbf2[1] + (i01%args.nef1[1])*args.nbf1[1]);
+
+    float sumf = 0.0f;
+
+    for (int i00 = tpitg.x; i00 < args.ne00_t; i00 += ntg.x) {
+        sumf += dot(x[i00], x[i00]);
+    }
+    sumf = simd_sum(sumf);
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (tiisg == 0) {
+        shmem_f32[sgitg] = sumf;
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    sumf = shmem_f32[tiisg];
+    sumf = simd_sum(sumf);
+
+    const float mean  = sumf/args.ne00;
+    const float scale = 1.0f/sqrt(mean + args.eps);
+
+    device T   * y   = (device T   *) (dst   + i03*args.nb3   + i02*args.nb2   + i01*args.nb1);
+    device T16 * y16 = (device T16 *) (dst16 + i03*args.nb3_16 + i02*args.nb2_16 + i01*args.nb1_16);
+
+    for (int i00 = tpitg.x; i00 < args.ne00_t; i00 += ntg.x) {
+        const T v = (x[i00]*scale)*f0[i00];
+        y[i00] = v;
+        y16[i00] = (T16) v;
+    }
+}
+
+[[host_name("kernel_rms_norm_mul_cpy_f32")]]
+kernel void kernel_rms_norm_mul_cpy_f32(
+        constant ggml_metal_kargs_norm & args,
+        device const char * src0,
+        device const char * src1_0,
+        device const char * src1_1,
+        device       char * dst,
+        device       char * dst16,
+        threadgroup float * shmem_f32 [[threadgroup(0)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    rms_norm_mul_cpy_body<float, half>(args, src0, src1_0, dst, dst16, shmem_f32, tgpig, tpitg, sgitg, tiisg, ntg);
+}
+
+[[host_name("kernel_rms_norm_mul_cpy_f32_4")]]
+kernel void kernel_rms_norm_mul_cpy_f32_4(
+        constant ggml_metal_kargs_norm & args,
+        device const char * src0,
+        device const char * src1_0,
+        device const char * src1_1,
+        device       char * dst,
+        device       char * dst16,
+        threadgroup float * shmem_f32 [[threadgroup(0)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    rms_norm_mul_cpy_body<float4, half4>(args, src0, src1_0, dst, dst16, shmem_f32, tgpig, tpitg, sgitg, tiisg, ntg);
+}
+
 typedef decltype(kernel_rms_norm_fuse_impl<float4, 1>) kernel_rms_norm_fuse_t;
 
 template [[host_name("kernel_rms_norm_f32")]]         kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<float, 1>;

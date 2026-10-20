@@ -637,6 +637,9 @@ typedef struct {
     uint64_t nbf2[3];
     uint64_t nbf3[3];
     float    scale;
+    uint64_t nb1_16;
+    uint64_t nb2_16;
+    uint64_t nb3_16;
 } ggml_metal_kargs_norm;
 
 typedef struct {
@@ -831,6 +834,7 @@ typedef struct{
     int32_t  i10;
     float    alpha;
     float    limit;
+    uint64_t nb1_16;
 } ggml_metal_kargs_glu;
 
 typedef struct {

@@ -699,7 +699,7 @@ static bool ggml_metal_fusion_check_mul_mat_add(
     const bool use_mma = ggml_metal_op_mul_mat_use_mma(mm);
     const bool use_mv  = !use_mma &&
         (mm->src[0]->type == GGML_TYPE_Q4_K || mm->src[0]->type == GGML_TYPE_Q6_K) &&
-        mm->src[1]->type == GGML_TYPE_F32 && mm->src[1]->ne[1] == 1 &&
+        (mm->src[1]->type == GGML_TYPE_F32 || mm->src[1]->type == GGML_TYPE_F16) && mm->src[1]->ne[1] == 1 &&
         !ggml_is_transposed(mm->src[0]) && !ggml_is_transposed(mm->src[1]);
 
     if (!use_mma && !use_mv) {
@@ -720,12 +720,114 @@ static bool ggml_metal_fusion_check_mul_mat_add(
         (add->data == res->data || !ggml_metal_fusion_overlap(add, res));
 }
 
+// RMS_NORM + MUL + CPY(f16): the norm kernel writes the f16 copy itself, so the cast
+// does not sit on the critical path between the norm and its mat-vec consumers
+static bool ggml_metal_fusion_check_norm_cpy(
+        const ggml_metal_fusion       * fusion,
+        const ggml_tensor * const     * nodes,
+        const ggml_cgraph             * gf,
+        const int                     * node_idxs,
+              int                       idx,
+              ggml_metal_fusion_mode    mode) {
+    GGML_UNUSED(fusion);
+    GGML_UNUSED(gf);
+    GGML_UNUSED(node_idxs);
+    GGML_UNUSED(idx);
+
+    const ggml_tensor * norm = nodes[0];
+    const ggml_tensor * mul  = nodes[1];
+    const ggml_tensor * cpy  = nodes[2];
+
+    if (norm->op != GGML_OP_RMS_NORM || mul->op != GGML_OP_MUL || cpy->op != GGML_OP_CPY) {
+        return false;
+    }
+
+    if (norm->type != GGML_TYPE_F32 || mul->type != GGML_TYPE_F32 || cpy->type != GGML_TYPE_F16) {
+        return false;
+    }
+
+    if (mul->src[0] != norm || cpy->src[0] != mul) {
+        return false;
+    }
+
+    if (!ggml_is_contiguous_rows(norm->src[0]) || !ggml_is_contiguous(mul) || !ggml_is_contiguous(cpy)) {
+        return false;
+    }
+
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        if (mul->ne[i] != cpy->ne[i]) {
+            return false;
+        }
+    }
+
+    if ((norm->flags & GGML_TENSOR_FLAG_OUTPUT) || (mul->flags & GGML_TENSOR_FLAG_OUTPUT) ||
+        (cpy->flags & GGML_TENSOR_FLAG_OUTPUT)) {
+        return false;
+    }
+
+    if (mode == GGML_METAL_FUSION_STRUCTURAL) {
+        return true;
+    }
+
+    return true;
+}
+
+// SWIGLU + CPY(f16): the activation kernel writes the f16 copy itself
+static bool ggml_metal_fusion_check_glu_cpy(
+        const ggml_metal_fusion       * fusion,
+        const ggml_tensor * const     * nodes,
+        const ggml_cgraph             * gf,
+        const int                     * node_idxs,
+              int                       idx,
+              ggml_metal_fusion_mode    mode) {
+    GGML_UNUSED(fusion);
+    GGML_UNUSED(gf);
+    GGML_UNUSED(node_idxs);
+    GGML_UNUSED(idx);
+
+    const ggml_tensor * glu = nodes[0];
+    const ggml_tensor * cpy = nodes[1];
+
+    if (glu->op != GGML_OP_GLU || cpy->op != GGML_OP_CPY) {
+        return false;
+    }
+
+    if (ggml_get_glu_op(glu) != GGML_GLU_OP_SWIGLU || glu->src[1] == nullptr) {
+        return false;
+    }
+
+    if (glu->type != GGML_TYPE_F32 || cpy->type != GGML_TYPE_F16 || cpy->src[0] != glu) {
+        return false;
+    }
+
+    if (!ggml_is_contiguous_1(glu->src[0]) || !ggml_is_contiguous_1(glu->src[1]) || !ggml_is_contiguous(cpy)) {
+        return false;
+    }
+
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        if (glu->ne[i] != cpy->ne[i]) {
+            return false;
+        }
+    }
+
+    if ((glu->flags & GGML_TENSOR_FLAG_OUTPUT) || (cpy->flags & GGML_TENSOR_FLAG_OUTPUT)) {
+        return false;
+    }
+
+    if (mode == GGML_METAL_FUSION_STRUCTURAL) {
+        return true;
+    }
+
+    return true;
+}
+
 // ---- patterns ------------------------------------------------------------
 
 static const std::vector<ggml_op> ops_norm_mul         = { GGML_OP_NORM, GGML_OP_MUL };
 static const std::vector<ggml_op> ops_norm_mul_add     = { GGML_OP_NORM, GGML_OP_MUL, GGML_OP_ADD };
 static const std::vector<ggml_op> ops_norm_scale       = { GGML_OP_NORM, GGML_OP_SCALE };
 static const std::vector<ggml_op> ops_rms_norm_mul     = { GGML_OP_RMS_NORM, GGML_OP_MUL };
+static const std::vector<ggml_op> ops_rms_norm_mul_cpy = { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_CPY };
 static const std::vector<ggml_op> ops_rms_norm_mul_add = { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD };
 static const std::vector<ggml_op> ops_rms_norm_scale   = { GGML_OP_RMS_NORM, GGML_OP_SCALE };
 
@@ -736,6 +838,7 @@ static const std::vector<ggml_op> ops_add_5 = { GGML_OP_ADD, GGML_OP_ADD, GGML_O
 static const std::vector<ggml_op> ops_add_6 = { GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
 static const std::vector<ggml_op> ops_add_7 = { GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
 static const std::vector<ggml_op> ops_snake = { GGML_OP_MUL, GGML_OP_SIN, GGML_OP_SQR, GGML_OP_MUL, GGML_OP_ADD };
+static const std::vector<ggml_op> ops_glu_cpy = { GGML_OP_GLU, GGML_OP_CPY };
 
 static const std::vector<ggml_op> ops_gdn_cache = { GGML_OP_GATED_DELTA_NET, GGML_OP_CPY };
 
@@ -778,6 +881,8 @@ static const std::vector<ggml_metal_fusion> ggml_metal_fusions = {
     { GGML_METAL_FUSION_NORM_MUL,       ops_rms_norm_mul,           {},     false, ggml_metal_fusion_check_norm },
     { GGML_METAL_FUSION_NORM_MUL_ADD,   ops_rms_norm_mul_add,       {},     false, ggml_metal_fusion_check_norm },
     { GGML_METAL_FUSION_NORM_SCALE,     ops_rms_norm_scale,         {},     false, ggml_metal_fusion_check_norm },
+    { GGML_METAL_FUSION_NORM_MUL_CPY,    ops_rms_norm_mul_cpy,       {},     true,  ggml_metal_fusion_check_norm_cpy },
+    { GGML_METAL_FUSION_GLU_CPY,         ops_glu_cpy,                {},     true,  ggml_metal_fusion_check_glu_cpy },
     { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_2,                  {},     false, ggml_metal_fusion_check_add_chain },
     { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_3,                  {},     false, ggml_metal_fusion_check_add_chain },
     { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_4,                  {},     false, ggml_metal_fusion_check_add_chain },

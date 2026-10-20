@@ -1533,6 +1533,12 @@ static bool ggml_metal_supports_mul_mat_op(
         return true;
     }
 
+    // quantized src0 has a mat-vec kernel for an f16 src1 (decode shapes)
+    if (src0_f16_has_mv &&
+        (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q6_K)) {
+        return true;
+    }
+
     return mm_path;
 }
 

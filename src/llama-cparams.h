@@ -51,6 +51,7 @@ struct llama_cparams {
     bool no_perf;
     bool warmup;             // TODO: remove [TAG_LLAMA_GRAPH_NO_WARMUP]
     bool op_offload;
+    bool f16_act; // feed quantized mat-vecs an f16 copy of the f32 activation
     bool kv_unified;
     bool pipeline_parallel;
     bool training;           // set by llama_opt_init()

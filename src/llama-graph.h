@@ -1069,6 +1069,9 @@ struct llm_graph_context {
 
     llm_graph_result * res;
 
+    // research: one f16 copy of an f32 activation per graph, shared by all its mat-vec consumers
+    mutable std::map<ggml_tensor *, ggml_tensor *> f16_act_cache;
+
     ggml_context * ctx0 = nullptr;
     ggml_cgraph  * gf   = nullptr;
 

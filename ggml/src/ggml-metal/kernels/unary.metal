@@ -280,6 +280,48 @@ kernel void kernel_swiglu(
     }
 }
 
+// SWIGLU + CPY to f16: write the f16 copy in the same kernel
+template<typename T, typename T16>
+static void kernel_swiglu_cpy_impl(
+        constant ggml_metal_kargs_glu & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        device       char * dst16,
+        uint tgpig,
+        uint tpitg,
+        uint   ntg) {
+    device const T * src0_row = (device const T *) ((device const char *) src0 + tgpig*args.nb01) + args.i00;
+    device const T * src1_row = (device const T *) ((device const char *) src1 + tgpig*args.nb11) + args.i10;
+    device       T * dst_row  = (device       T *) ((device       char *) dst  + tgpig*args.nb1);
+    device     T16 * dst16_row = (device     T16 *) ((device      char *) dst16 + tgpig*args.nb1_16);
+
+    for (int i0 = tpitg; i0 < args.ne0; i0 += ntg) {
+        const float x0 = src0_row[i0];
+        const float x1 = src1_row[i0];
+
+        const float silu = x0 / (1.0f + exp(-x0));
+
+        const T v = (T)(silu*x1);
+
+        dst_row[i0] = v;
+        dst16_row[i0] = (T16) v;
+    }
+}
+
+[[host_name("kernel_swiglu_cpy_f32")]]
+kernel void kernel_swiglu_cpy_f32(
+        constant ggml_metal_kargs_glu & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        device       char * dst16,
+        uint tgpig[[threadgroup_position_in_grid]],
+        uint tpitg[[thread_position_in_threadgroup]],
+        uint   ntg[[threads_per_threadgroup]]) {
+    kernel_swiglu_cpy_impl<float, half>(args, src0, src1, dst, dst16, tgpig, tpitg, ntg);
+}
+
 typedef decltype(kernel_swiglu<float>) kernel_swiglu_t;
 
 template [[host_name("kernel_swiglu_f32")]] kernel kernel_swiglu_t kernel_swiglu<float>;
