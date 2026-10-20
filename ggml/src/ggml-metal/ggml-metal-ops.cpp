@@ -3529,6 +3529,30 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
     ggml_metal_buffer_id bid_dst = ggml_metal_get_buffer_id(op);
 
+    // sparse path: gather the finite mask entries into index lists and run the vec kernels over them
+    const int n_kv_max_sparse = ggml_metal_op_flash_attn_ext_n_kv_max_sparse(op);
+    const bool use_sparse = n_kv_max_sparse > 0;
+    const int n_kv_max_padded = use_sparse ? GGML_PAD(n_kv_max_sparse, OP_FLASH_ATTN_EXT_VEC_NCPSG) : 0;
+
+    int n_fuse = 1;
+    bool fused_cpy = false;
+    ggml_metal_buffer_id bid_cpy = bid_dst;
+
+    // the vec path with 32 workgroups reduces through a separate kernel, which can also write
+    // the f16 copy of the attention output
+    const bool has_reduce = ggml_metal_op_flash_attn_ext_use_vec(op) && !(use_sparse && ne01 > 32);
+
+    if (has_reduce && ctx->use_fusion()) {
+        int n = 1;
+        const ggml_metal_fusion * fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n);
+        if (fusion && ggml_metal_fusion_get_id(fusion) == GGML_METAL_FUSION_FA_CPY) {
+            n_fuse = n;
+            fused_cpy = true;
+            bid_cpy = ggml_metal_get_buffer_id(ctx->node(idx + 1));
+            ctx->count_fusions(fusion);
+        }
+    }
+
     ggml_metal_buffer_id bid_pad = bid_dst;
     bid_pad.offs += ggml_nbytes(op);
 
@@ -3540,11 +3564,6 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
     ggml_metal_buffer_id bid_kv_f16 = bid_tmp;
     bid_kv_f16.offs += ggml_metal_op_flash_attn_ext_extra_tmp(op);
-
-    // sparse path: gather the finite mask entries into index lists and run the vec kernels over them
-    const int n_kv_max_sparse = ggml_metal_op_flash_attn_ext_n_kv_max_sparse(op);
-    const bool use_sparse = n_kv_max_sparse > 0;
-    const int n_kv_max_padded = use_sparse ? GGML_PAD(n_kv_max_sparse, OP_FLASH_ATTN_EXT_VEC_NCPSG) : 0;
 
     // the vec kernels dequantize the KV inline; no need for the F16 dequant pass in the sparse path
     const bool use_kv_f16 = !use_sparse && ggml_metal_op_flash_attn_ext_use_kv_f16(op);
@@ -4145,19 +4164,24 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
                     nrows,
                 };
 
-                auto pipeline0 = ggml_metal_library_get_pipeline_flash_attn_ext_vec_reduce(lib, op, ne20, nwg);
+                auto pipeline0 = fused_cpy ?
+                    ggml_metal_library_get_pipeline_flash_attn_ext_vec_reduce_cpy(lib, op, ne20, nwg) :
+                    ggml_metal_library_get_pipeline_flash_attn_ext_vec_reduce(lib, op, ne20, nwg);
 
                 ggml_metal_encoder_set_pipeline(enc, pipeline0);
                 ggml_metal_encoder_set_bytes   (enc, &args0, sizeof(args0), 0);
                 ggml_metal_encoder_set_buffer  (enc, bid_tmp, 1);
                 ggml_metal_encoder_set_buffer  (enc, bid_dst, 2);
+                if (fused_cpy) {
+                    ggml_metal_encoder_set_buffer(enc, bid_cpy, 3);
+                }
 
                 ggml_metal_encoder_dispatch_threadgroups(enc, nrows, 1, 1, 32*nwg, 1, 1);
             }
         }
     }
 
-    return 1;
+    return n_fuse;
 }
 
 int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {

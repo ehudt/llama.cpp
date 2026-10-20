@@ -821,6 +821,71 @@ static bool ggml_metal_fusion_check_glu_cpy(
     return true;
 }
 
+// FLASH_ATTN_EXT + CPY(f16): the vec reduce pass writes the f16 copy, so the cast does not
+// sit on the critical path between the attention output and the o_proj mat-vec
+static bool ggml_metal_fusion_check_fa_cpy(
+        const ggml_metal_fusion       * fusion,
+        const ggml_tensor * const     * nodes,
+        const ggml_cgraph             * gf,
+        const int                     * node_idxs,
+              int                       idx,
+              ggml_metal_fusion_mode    mode) {
+    GGML_UNUSED(fusion);
+    GGML_UNUSED(gf);
+    GGML_UNUSED(node_idxs);
+    GGML_UNUSED(idx);
+
+    const ggml_tensor * fa  = nodes[0];
+    const ggml_tensor * cpy = nodes[1];
+
+    if (fa->op != GGML_OP_FLASH_ATTN_EXT || cpy->op != GGML_OP_CPY) {
+        return false;
+    }
+
+    if (fa->type != GGML_TYPE_F32 || cpy->type != GGML_TYPE_F16) {
+        return false;
+    }
+
+    // the reduce kernel writes the f16 copy in the linear order of the FA output, so the
+    // cast must read the full FA output, directly or through a contiguous reshape view
+    if (!ggml_is_contiguous(fa) || !ggml_is_contiguous(cpy)) {
+        return false;
+    }
+
+    if (ggml_nelements(fa) != ggml_nelements(cpy)) {
+        return false;
+    }
+
+    const ggml_tensor * src = cpy->src[0];
+    if (src != fa) {
+        if (src->view_src == nullptr || !ggml_is_contiguous(src) || src->view_offs != 0) {
+            return false;
+        }
+
+        if (ggml_nelements(src) != ggml_nelements(fa)) {
+            return false;
+        }
+
+        const ggml_tensor * v = src->view_src;
+        while (v != nullptr && v != fa) {
+            v = v->view_src;
+        }
+        if (v != fa) {
+            return false;
+        }
+
+        if (mode == GGML_METAL_FUSION_FULL && src->data != fa->data) {
+            return false;
+        }
+    }
+
+    if (mode == GGML_METAL_FUSION_FULL && cpy->data == nullptr) {
+        return false;
+    }
+
+    return true;
+}
+
 // ---- patterns ------------------------------------------------------------
 
 static const std::vector<ggml_op> ops_norm_mul         = { GGML_OP_NORM, GGML_OP_MUL };
@@ -839,6 +904,7 @@ static const std::vector<ggml_op> ops_add_6 = { GGML_OP_ADD, GGML_OP_ADD, GGML_O
 static const std::vector<ggml_op> ops_add_7 = { GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD, GGML_OP_ADD };
 static const std::vector<ggml_op> ops_snake = { GGML_OP_MUL, GGML_OP_SIN, GGML_OP_SQR, GGML_OP_MUL, GGML_OP_ADD };
 static const std::vector<ggml_op> ops_glu_cpy = { GGML_OP_GLU, GGML_OP_CPY };
+static const std::vector<ggml_op> ops_fa_cpy = { GGML_OP_FLASH_ATTN_EXT, GGML_OP_CPY };
 
 static const std::vector<ggml_op> ops_gdn_cache = { GGML_OP_GATED_DELTA_NET, GGML_OP_CPY };
 
@@ -883,6 +949,7 @@ static const std::vector<ggml_metal_fusion> ggml_metal_fusions = {
     { GGML_METAL_FUSION_NORM_SCALE,     ops_rms_norm_scale,         {},     false, ggml_metal_fusion_check_norm },
     { GGML_METAL_FUSION_NORM_MUL_CPY,    ops_rms_norm_mul_cpy,       {},     true,  ggml_metal_fusion_check_norm_cpy },
     { GGML_METAL_FUSION_GLU_CPY,         ops_glu_cpy,                {},     true,  ggml_metal_fusion_check_glu_cpy },
+    { GGML_METAL_FUSION_FA_CPY,         ops_fa_cpy,                 {},     true,  ggml_metal_fusion_check_fa_cpy },
     { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_2,                  {},     false, ggml_metal_fusion_check_add_chain },
     { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_3,                  {},     false, ggml_metal_fusion_check_add_chain },
     { GGML_METAL_FUSION_ADD_CHAIN,      ops_add_4,                  {},     false, ggml_metal_fusion_check_add_chain },

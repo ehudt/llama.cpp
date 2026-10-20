@@ -329,6 +329,54 @@ kernel void kernel_flash_attn_ext_vec_reduce(
 #undef DV
 }
 
+// FA + CPY(f16): write the f16 copy of the attention output in the reduce pass
+kernel void kernel_flash_attn_ext_vec_reduce_cpy(
+        constant ggml_metal_kargs_flash_attn_ext_vec_reduce & args,
+        device  const char * htmp,
+        device        char * dst,
+        device        char * dst16,
+        uint   tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+#define NWG (FC_flash_attn_ext_vec_reduce_NWG)
+#define DV  (FC_flash_attn_ext_vec_reduce_DV)
+
+    const uint64_t rid = tgpig;
+
+    const short iwg = tiisg;
+
+    device const float  * ss    = (device const float  *) htmp + (uint64_t)args.nrows*DV*NWG;
+
+    float S = ss[rid*(2*NWG) + 2*iwg + 0];
+    float M = ss[rid*(2*NWG) + 2*iwg + 1];
+
+    const float m  = simd_max(M);
+    const float ms = exp(M - m);
+
+    S = simd_sum(S*ms);
+    S = S == 0.0f ? 0.0f : 1.0f/S;
+
+    const short DV4 = DV/4;
+
+    device const float4 * htmp4   = (device const float4 *) htmp + rid*DV4*NWG;
+    device       float4 * dst4    = (device       float4 *) dst  + rid*DV4;
+    device       half4  * dst16_4 = (device       half4  *) dst16 + rid*DV4;
+
+    for (short i = sgitg; i < DV4; i += NWG) {
+        const float4 v = simd_sum(htmp4[i*NWG + iwg]*ms);
+
+        if (iwg == 0) {
+            dst4[i] = v*S;
+
+            const float4 v16 = v*S;
+            dst16_4[i] = half4((half) v16.x, (half) v16.y, (half) v16.z, (half) v16.w);
+        }
+    }
+
+#undef NWG
+#undef DV
+}
+
 constant short FC_lightning_indexer_nh [[function_constant(FC_LIGHTNING_INDEXER + 0)]];
 
 template<
