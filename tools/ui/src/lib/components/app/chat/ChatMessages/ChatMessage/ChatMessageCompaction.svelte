@@ -90,7 +90,7 @@
 	});
 </script>
 
-<div class={className}>
+<div class="chat-message-compaction {className}">
 	{#if editCtx.isEditing}
 		<ChatMessageEditForm />
 	{:else}
@@ -137,3 +137,27 @@
 		</CollapsibleContentBlock>
 	{/if}
 </div>
+
+<style>
+	/*
+	 * A compaction ends the branch, so its row fills the message area: with the
+	 * view scrolled to the bottom the divider starts at the top of the screen,
+	 * the way the last user bubble does while a turn streams. The offsets are
+	 * the chat form block the messages never scroll under.
+	 */
+	:global(.chat-message):last-child .chat-message-compaction {
+		/* The screen fades out along its top edge, so the divider starts below it. */
+		padding-top: 2rem;
+		min-height: calc(
+			100dvh - var(--chat-form-height, 6rem) - var(--chat-form-bottom-position, 0.5rem) -
+				var(--chat-form-padding-top, 6rem) - var(--chat-tabs-offset, 0px)
+		);
+
+		@media (width > 768px) {
+			min-height: calc(
+				100dvh - var(--chat-form-height, 6rem) - var(--chat-form-bottom-position, 1rem) -
+					var(--chat-form-padding-top, 6rem) - var(--chat-tabs-offset, 0px)
+			);
+		}
+	}
+</style>
