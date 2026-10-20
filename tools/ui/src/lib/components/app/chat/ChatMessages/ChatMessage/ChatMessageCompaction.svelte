@@ -73,12 +73,16 @@
 	const title = $derived(isSummarizing || !hasContent ? runningLabel : completedLabel);
 
 	let open = $state(false);
+	// A toggle by hand outranks the in-progress expansion, the way the agentic
+	// sections treat their own overrides.
+	let userChoseOpen = $state<boolean | null>(null);
 
-	// The processing line lives in the body (as it does for an assistant turn),
-	// so the row opens itself while the summary runs and then stays where the
-	// user left it.
+	// The progress lives in the body (as it does for an assistant turn), so the
+	// row opens while the summary runs and collapses once it is done.
 	$effect(() => {
-		if (isSummarizing) open = true;
+		if (userChoseOpen !== null) return;
+
+		open = isSummarizing;
 	});
 </script>
 
@@ -91,6 +95,7 @@
 			class="my-2"
 			icon={FoldVertical}
 			iconClass="h-3.5 w-3.5"
+			onToggle={() => (userChoseOpen = open)}
 			shimmerTitle={isSummarizing || !hasContent}
 			{title}
 			variant="divider"
