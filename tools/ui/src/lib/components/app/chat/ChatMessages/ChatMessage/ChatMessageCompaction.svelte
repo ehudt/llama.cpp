@@ -55,7 +55,7 @@
 	// first summary token arrives.
 	const runningLabel = $derived.by(() => {
 		// The prompt is through: whatever streams in now is the summary itself.
-		if (hasContent) return COMPACTION_GENERATING_LABEL;
+		if (hasContent) return `${COMPACTION_RUNNING_LABEL} — ${COMPACTION_GENERATING_LABEL}`;
 
 		const progress = processingState.getPromptProgressText();
 
