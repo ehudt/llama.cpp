@@ -848,7 +848,7 @@ static bool ggml_metal_fusion_check_fa_cpy(
 
     // the reduce kernel writes the f16 copy in the linear order of the FA output, so the
     // cast must read the full FA output, directly or through a contiguous reshape view
-    if (!ggml_is_contiguous(fa) || !ggml_is_contiguous(cpy)) {
+    if (!ggml_is_contiguous(fa) || !ggml_is_contiguous(cpy) || cpy->view_src != nullptr) {
         return false;
     }
 
