@@ -10,7 +10,6 @@
 		MarkdownContent
 	} from '$lib/components/app';
 	import { getChatMessageEditContext } from '$lib/contexts';
-	import { MessageRole } from '$lib/enums';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { chatStore, conversationsStore, serverStore, settingsStore } from '$lib/stores';
 	import type { DatabaseMessage } from '$lib/types';
@@ -133,12 +132,7 @@
 			{#if hasContent && !isSummarizing}
 				<!-- Copy, edit, fork, regenerate and delete all apply to the summary:
 				     regenerate re-runs it in place. Continue stays a chat-turn flow. -->
-				<ChatMessageActionIcons
-					actionsPosition="left"
-					justify="start"
-					{onRegenerate}
-					role={MessageRole.ASSISTANT}
-				/>
+				<ChatMessageActionIcons actionsPosition="left" justify="start" {onRegenerate} />
 			{/if}
 		</CollapsibleContentBlock>
 	{/if}
