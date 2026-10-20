@@ -87,7 +87,7 @@
 {#snippet compactAction()}
 	{#if showCompactButton}
 		<Button
-			class="my-1 w-full gap-1.5"
+			class="my-1 w-full gap-1.5 mt-3"
 			disabled={isCompactDisabled}
 			onclick={handleCompact}
 			size="sm"

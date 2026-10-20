@@ -645,21 +645,42 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 		if (!canCompactMessages(source)) return;
 
+		this.cancelPreEncode();
 		this.showErrorDialog(null);
 		this.setChatLoading(convId, true);
+		this.clearChatStreaming(convId);
 
-		const previous = { content: node.content, model: node.model };
+		// A sibling under the same parent, like an assistant regeneration: the
+		// previous summary stays reachable through the branching controls, and
+		// the branch only follows the new one once it has something to show.
+		const sibling = await DatabaseService.createMessageBranch(
+			{
+				children: [],
+				content: '',
+				convId,
+				model: node.model ?? null,
+				role: MessageRole.USER,
+				timestamp: Date.now(),
+				toolCalls: '',
+				type: MessageType.COMPACTION
+			},
+			node.parent
+		);
+
+		await conversationsStore.updateCurrentNode(sibling.id);
+		conversationsStore.updateConversationTimestamp();
+		await conversationsStore.refreshActiveMessages();
 
 		await this.summarizeIntoNode(
 			convId,
-			node,
+			sibling,
 			source,
 			async () => {
-				const idx = conversationsStore.findMessageIndex(node.id);
-
-				if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, previous);
-
-				await DatabaseService.updateMessage(node.id, previous);
+				// Nothing usable came back: drop the empty sibling and put the
+				// branch back on the summary it was regenerating from.
+				await DatabaseService.deleteMessage(sibling.id);
+				await conversationsStore.updateCurrentNode(node.id);
+				await conversationsStore.refreshActiveMessages();
 			},
 			modelOverride
 		);
