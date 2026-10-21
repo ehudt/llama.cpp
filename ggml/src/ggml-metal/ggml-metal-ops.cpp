@@ -4168,6 +4168,8 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
                     ggml_metal_library_get_pipeline_flash_attn_ext_vec_reduce_cpy(lib, op, ne20, nwg) :
                     ggml_metal_library_get_pipeline_flash_attn_ext_vec_reduce(lib, op, ne20, nwg);
 
+                GGML_ASSERT(32*nwg <= (int) ggml_metal_pipeline_max_theads_per_threadgroup(pipeline0));
+
                 ggml_metal_encoder_set_pipeline(enc, pipeline0);
                 ggml_metal_encoder_set_bytes   (enc, &args0, sizeof(args0), 0);
                 ggml_metal_encoder_set_buffer  (enc, bid_tmp, 1);
